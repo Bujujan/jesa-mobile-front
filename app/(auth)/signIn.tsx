@@ -1,8 +1,8 @@
+import { useSignIn } from "@clerk/clerk-expo";
 import { Button, Input } from "@rneui/themed";
 import { useRouter } from "expo-router";
-import React, { useState } from "react";
+import React from "react";
 import {
-  Alert,
   Image,
   SafeAreaView,
   StatusBar,
@@ -11,27 +11,41 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
-import { supabase } from "../../lib/supabase";
 
 export default function SignIn() {
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [loading, setLoading] = useState(false);
+  const { signIn, setActive, isLoaded } = useSignIn();
   const router = useRouter();
 
-  async function signInWithEmail() {
-    setLoading(true);
-    const { error } = await supabase.auth.signInWithPassword({
-      email,
-      password,
-    });
-    if (error) {
-      Alert.alert(error.message);
-    } else {
-      router.replace("/(tabs)/homeScreen"); // ✅ Redirect to main app after login
+  const [emailAddress, setEmailAddress] = React.useState("");
+  const [password, setPassword] = React.useState("");
+
+  // Handle the submission of the sign-in form
+  const onSignInPress = async () => {
+    if (!isLoaded) return;
+
+    // Start the sign-in process using the email and password provided
+    try {
+      const signInAttempt = await signIn.create({
+        identifier: emailAddress,
+        password,
+      });
+
+      // If sign-in process is complete, set the created session as active
+      // and redirect the user
+      if (signInAttempt.status === "complete") {
+        await setActive({ session: signInAttempt.createdSessionId });
+        router.replace("/");
+      } else {
+        // If the status isn't complete, check why. User might need to
+        // complete further steps.
+        console.error(JSON.stringify(signInAttempt, null, 2));
+      }
+    } catch (err) {
+      // See https://clerk.com/docs/custom-flows/error-handling
+      // for more info on error handling
+      console.error(JSON.stringify(err, null, 2));
     }
-    setLoading(false);
-  }
+  };
 
   return (
     <SafeAreaView style={styles.container}>
@@ -54,8 +68,8 @@ export default function SignIn() {
         <View style={styles.inputContainer}>
           <Text style={styles.inputLabel}>Email Address</Text>
           <Input
-            onChangeText={setEmail}
-            value={email}
+            onChangeText={setEmailAddress}
+            value={emailAddress}
             placeholder="JohnDoe@example.com"
             autoCapitalize="none"
             keyboardType="email-address"
@@ -84,11 +98,11 @@ export default function SignIn() {
         {/* Sign In Button */}
         <Button
           title="Sign in"
-          disabled={loading}
-          onPress={signInWithEmail}
+          disabled={!isLoaded}
+          onPress={onSignInPress}
           buttonStyle={styles.signInButton}
           titleStyle={styles.signInButtonText}
-          loading={loading}
+          loading={!isLoaded}
         />
 
         {/* Divider */}
