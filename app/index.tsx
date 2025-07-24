@@ -1,6 +1,5 @@
-import { useAuth } from "@clerk/clerk-expo";
 import { Ionicons } from "@expo/vector-icons";
-import { Redirect, router } from "expo-router";
+import { router } from "expo-router";
 import React from "react";
 import {
   Image,
@@ -13,11 +12,11 @@ import {
 } from "react-native";
 
 const OnboardingScreen = () => {
-  const { isSignedIn } = useAuth();
+  // const { isSignedIn } = useAuth();
 
-  if (isSignedIn) {
-    return <Redirect href={"/(tabs)"} />;
-  }
+  // if (isSignedIn) {
+  //   return <Redirect href={"/(tabs)"} />;
+  // }
   const handleGetStarted = () => {
     // Navigate to next screen
     router.push("/(auth)/signUp");
