@@ -1,9 +1,10 @@
 import { useAuth, useUser } from "@clerk/clerk-expo";
 import { Ionicons } from "@expo/vector-icons";
 import axios from "axios";
-import React, { useEffect, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import {
   ActivityIndicator,
+  RefreshControl,
   SafeAreaView,
   ScrollView,
   StyleSheet,
@@ -25,18 +26,26 @@ const HomeScreen = () => {
   const { user } = useUser(); // Get the current user from Clerk
   const { getToken } = useAuth(); // Get the token from useAuth
   const [projects, setProjects] = useState<Project[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [hasInitiallyLoaded, setHasInitiallyLoaded] = useState(false);
 
-  // Function to fetch projects assigned to the logged-in user
-  const fetchAssignedProjects = async () => {
+  // Updated function with better error handling and response parsing
+  const fetchAssignedProjects = async (isRefreshing = false) => {
     if (!user) {
       setError("User not authenticated");
-      setLoading(false);
       return;
     }
 
     try {
+      if (isRefreshing) {
+        setRefreshing(true);
+      } else {
+        setLoading(true);
+      }
+      setError(null);
+
       // Retrieve the Clerk JWT token
       const token = await getToken();
       if (!token) {
@@ -53,23 +62,51 @@ const HomeScreen = () => {
         }
       );
 
-      // Extract projects from the project-user associations
-      const assignedProjects = response.data.project
-        ? [response.data.project]
-        : [];
-      setProjects(assignedProjects);
+      console.log("API Response:", response.data); // Debug log
+
+      // Handle the response based on the new backend structure
+      if (response.data.success) {
+        setProjects(response.data.projects || []);
+      } else {
+        throw new Error(response.data.message || "Failed to fetch projects");
+      }
+
+      setHasInitiallyLoaded(true);
+    } catch (err: any) {
+      console.error("Fetch error:", err);
+
+      if (err.response) {
+        // Server responded with error status
+        setError(
+          `Server error: ${err.response.status} - ${
+            err.response.data?.message || "Unknown error"
+          }`
+        );
+      } else if (err.request) {
+        // Network error
+        setError("Network error. Please check your connection.");
+      } else {
+        // Other error
+        setError(err.message || "Failed to fetch projects. Please try again.");
+      }
+      setHasInitiallyLoaded(true);
+    } finally {
       setLoading(false);
-    } catch (err) {
-      setError("Failed to fetch projects. Please try again.");
-      setLoading(false);
-      console.error(err);
+      setRefreshing(false);
     }
   };
 
-  // Fetch projects when the component mounts or user changes
-  useEffect(() => {
-    fetchAssignedProjects();
+  // Handle pull-to-refresh
+  const onRefresh = useCallback(() => {
+    fetchAssignedProjects(true);
   }, [user, getToken]);
+
+  // Fetch projects only once when component mounts and user is available
+  useEffect(() => {
+    if (user && !hasInitiallyLoaded) {
+      fetchAssignedProjects();
+    }
+  }, [user]); // Only depend on user, not getToken
 
   // Function to format the last modified date
   const formatLastModified = (dateString: string) => {
@@ -82,6 +119,34 @@ const HomeScreen = () => {
     if (diffInHours < 24) return `${diffInHours} hrs ago`;
     return `${Math.floor(diffInHours / 24)} days ago`;
   };
+
+  // Show loading only on initial load
+  if (loading && !hasInitiallyLoaded) {
+    return (
+      <SafeAreaView style={styles.container}>
+        <View style={styles.header}>
+          <View style={styles.searchContainer}>
+            <Ionicons
+              name="search"
+              size={20}
+              color="#999"
+              style={styles.searchIcon}
+            />
+            <TextInput
+              style={styles.searchInput}
+              placeholder="search for a project"
+              placeholderTextColor="#999"
+            />
+          </View>
+          <TouchableOpacity style={styles.settingsButton}>
+            <Ionicons name="settings-outline" size={24} color="#333" />
+          </TouchableOpacity>
+        </View>
+        <Text style={styles.sectionTitle}>Assigned Projects</Text>
+        <ActivityIndicator size="large" color="#007AFF" style={styles.loader} />
+      </SafeAreaView>
+    );
+  }
 
   return (
     <SafeAreaView style={styles.container}>
@@ -107,12 +172,30 @@ const HomeScreen = () => {
 
       {/* Main Content */}
       <Text style={styles.sectionTitle}>Assigned Projects</Text>
-      {loading ? (
-        <ActivityIndicator size="large" color="#007AFF" style={styles.loader} />
-      ) : error ? (
-        <Text style={styles.errorText}>{error}</Text>
+
+      {error ? (
+        <ScrollView
+          style={styles.content}
+          refreshControl={
+            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
+          }
+        >
+          <Text style={styles.errorText}>{error}</Text>
+          <TouchableOpacity
+            style={styles.retryButton}
+            onPress={() => fetchAssignedProjects()}
+          >
+            <Text style={styles.retryText}>Tap to retry</Text>
+          </TouchableOpacity>
+        </ScrollView>
       ) : (
-        <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
+        <ScrollView
+          style={styles.content}
+          showsVerticalScrollIndicator={false}
+          refreshControl={
+            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
+          }
+        >
           {/* Project Cards */}
           {projects.length === 0 ? (
             <Text style={styles.noProjectsText}>No projects assigned</Text>
@@ -222,6 +305,19 @@ const styles = StyleSheet.create({
     color: "red",
     textAlign: "center",
     marginTop: 20,
+    marginBottom: 20,
+  },
+  retryButton: {
+    backgroundColor: "#007AFF",
+    padding: 12,
+    borderRadius: 8,
+    alignItems: "center",
+    marginHorizontal: 40,
+  },
+  retryText: {
+    color: "white",
+    fontSize: 16,
+    fontWeight: "500",
   },
   noProjectsText: {
     fontSize: 16,
