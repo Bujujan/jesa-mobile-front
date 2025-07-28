@@ -37,9 +37,7 @@ export default function SignUpScreen() {
     setLoading(true);
     try {
       const response = await fetch(
-        `${
-          process.env.EXPO_PUBLIC_API_URL || "http://192.168.11.105:3000"
-        }/auth/signup`,
+        `${process.env.EXPO_PUBLIC_API_URL}/auth/signup`,
         {
           method: "POST",
           headers: {
