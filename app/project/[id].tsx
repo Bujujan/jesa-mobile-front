@@ -1,8 +1,13 @@
+import { useAuth } from "@clerk/clerk-expo";
 import { Ionicons } from "@expo/vector-icons";
 import { Picker } from "@react-native-picker/picker";
-import React, { useState } from "react";
+import axios from "axios";
+import { useLocalSearchParams, useRouter } from "expo-router";
+import React, { useEffect, useState } from "react";
 import {
+  ActivityIndicator,
   Alert,
+  Platform,
   SafeAreaView,
   ScrollView,
   StyleSheet,
@@ -12,29 +17,90 @@ import {
   View,
 } from "react-native";
 
-const RecordPunchScreen = ({ navigation }: { navigation: any }) => {
+// Define the System type based on your backend's System entity
+interface System {
+  uuid: string;
+  system_number: string;
+  description: string;
+  area: string;
+  system_type: string;
+  contractors: string;
+}
+
+const RecordPunchScreen = () => {
+  const { id, projectName } = useLocalSearchParams<{
+    id: string;
+    projectName: string;
+  }>();
+  const { getToken } = useAuth();
+  const router = useRouter();
   const [formData, setFormData] = useState({
-    projectName: "",
+    projectName: projectName || "",
     system: "",
     punchTitle: "",
     punchDescription: "",
     punchCategory: "",
     punchImage: null,
   });
-
+  const [systems, setSystems] = useState<System[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [showSystemPicker, setShowSystemPicker] = useState(false);
   const [showCategoryPicker, setShowCategoryPicker] = useState(false);
 
-  const systems = [
-    "Electrical",
-    "Plumbing",
-    "HVAC",
-    "Structural",
-    "Finishing",
-    "Safety",
-  ];
-
   const categories = ["A", "B", "C", "D"];
+
+  const fetchSystems = async () => {
+    if (!id) {
+      setError("No project ID provided");
+      setLoading(false);
+      return;
+    }
+
+    try {
+      setLoading(true);
+      setError(null);
+
+      const token = await getToken();
+      if (!token) {
+        throw new Error("No authentication token found");
+      }
+
+      const response = await axios.get(
+        `http://172.20.10.2:3000/systems/project/${id}`,
+        {
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        }
+      );
+
+      console.log("Systems API Response:", response.data);
+
+      setSystems(response.data || []);
+    } catch (err: any) {
+      console.error("Fetch systems error:", err);
+      setError(
+        err.response
+          ? `Server error: ${err.response.status} - ${
+              err.response.data?.message || "Unknown error"
+            }`
+          : err.request
+          ? "Network error. Please check your connection."
+          : err.message || "Failed to fetch systems. Please try again."
+      );
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (id) {
+      fetchSystems();
+    } else {
+      setError("No project ID provided");
+    }
+  }, [id]);
 
   const handleInputChange = (field: string, value: string) => {
     setFormData((prev) => ({
@@ -52,13 +118,14 @@ const RecordPunchScreen = ({ navigation }: { navigation: any }) => {
   };
 
   const handleCreatePunch = () => {
-    if (!formData.projectName || !formData.punchTitle) {
+    if (!formData.projectName || !formData.punchTitle || !formData.system) {
       Alert.alert("Error", "Please fill in required fields");
       return;
     }
 
     console.log("Creating punch with data:", formData);
     Alert.alert("Success", "Punch created successfully!");
+    router.back();
   };
 
   const DropdownField = ({
@@ -69,62 +136,83 @@ const RecordPunchScreen = ({ navigation }: { navigation: any }) => {
     onValueChange,
     showPicker,
     setShowPicker,
+    getOptionLabel,
   }: {
     label: string;
     value: string;
     placeholder: string;
-    options: string[];
+    options: any[];
     onValueChange: (value: string) => void;
     showPicker: boolean;
     setShowPicker: (show: boolean) => void;
-  }) => (
-    <View style={styles.fieldContainer}>
-      <Text style={styles.fieldLabel}>{label}</Text>
-      <TouchableOpacity
-        style={styles.dropdownContainer}
-        onPress={() => setShowPicker(!showPicker)}
-      >
-        <Text style={[styles.dropdownText, !value && styles.placeholderText]}>
-          {value || placeholder}
-        </Text>
-        <Ionicons
-          name="chevron-down"
-          size={20}
-          color="#999"
-          style={[
-            styles.dropdownIcon,
-            showPicker && styles.dropdownIconRotated,
-          ]}
-        />
-      </TouchableOpacity>
+    getOptionLabel?: (option: any) => string;
+  }) => {
+    // Debug log to inspect options and selected value
+    console.log(`${label} Dropdown - Value:`, value, "Options:", options);
 
-      {showPicker && (
-        <View style={styles.pickerContainer}>
-          <Picker
-            selectedValue={value}
-            onValueChange={(itemValue) => {
-              onValueChange(itemValue);
-              setShowPicker(false);
-            }}
-            style={styles.picker}
-          >
-            <Picker.Item label={placeholder} value="" />
-            {options.map((option, index) => (
-              <Picker.Item key={index} label={option} value={option} />
-            ))}
-          </Picker>
-        </View>
-      )}
-    </View>
-  );
+    return (
+      <View style={styles.fieldContainer}>
+        <Text style={styles.fieldLabel}>{label}</Text>
+        <TouchableOpacity
+          style={styles.dropdownContainer}
+          onPress={() => setShowPicker(!showPicker)}
+        >
+          <Text style={[styles.dropdownText, !value && styles.placeholderText]}>
+            {value
+              ? getOptionLabel
+                ? options.find((opt) => getOptionLabel(opt) === value)
+                    ?.system_number || placeholder
+                : value
+              : placeholder}
+          </Text>
+          <Ionicons
+            name="chevron-down"
+            size={20}
+            color="#999"
+            style={[
+              styles.dropdownIcon,
+              showPicker && styles.dropdownIconRotated,
+            ]}
+          />
+        </TouchableOpacity>
+
+        {showPicker && (
+          <View style={styles.pickerContainer}>
+            <Picker
+              selectedValue={value}
+              onValueChange={(itemValue) => {
+                onValueChange(itemValue);
+                setShowPicker(false);
+              }}
+              style={styles.picker}
+              itemStyle={styles.pickerItem} // Apply itemStyle to Picker
+            >
+              <Picker.Item
+                label={placeholder}
+                value=""
+                style={styles.pickerItem}
+              />
+              {options.map((option, index) => (
+                <Picker.Item
+                  key={index}
+                  label={getOptionLabel ? getOptionLabel(option) : option}
+                  value={getOptionLabel ? getOptionLabel(option) : option}
+                  style={styles.pickerItem}
+                />
+              ))}
+            </Picker>
+          </View>
+        )}
+      </View>
+    );
+  };
 
   return (
     <SafeAreaView style={styles.container}>
-      {/* Header */}
       <View style={styles.header}>
         <TouchableOpacity
           style={styles.backButton}
-          onPress={() => navigation?.goBack()}
+          onPress={() => router.back()}
         >
           <Ionicons name="chevron-back" size={24} color="#333" />
         </TouchableOpacity>
@@ -133,30 +221,40 @@ const RecordPunchScreen = ({ navigation }: { navigation: any }) => {
       </View>
 
       <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
-        {/* Project Name */}
         <View style={styles.fieldContainer}>
           <Text style={styles.fieldLabel}>Project</Text>
           <TextInput
-            style={styles.textInput}
-            placeholder="Project NAME"
-            placeholderTextColor="#999"
+            style={[styles.textInput, styles.readOnlyInput]}
             value={formData.projectName}
-            onChangeText={(text) => handleInputChange("projectName", text)}
+            editable={false}
+            placeholderTextColor="#999"
           />
         </View>
 
-        {/* System Dropdown */}
-        <DropdownField
-          label="System"
-          value={formData.system}
-          placeholder="Choose a system"
-          options={systems}
-          onValueChange={(value) => handleInputChange("system", value)}
-          showPicker={showSystemPicker}
-          setShowPicker={setShowSystemPicker}
-        />
+        {loading ? (
+          <View style={styles.loaderContainer}>
+            <ActivityIndicator size="large" color="#007AFF" />
+          </View>
+        ) : error ? (
+          <View style={styles.errorContainer}>
+            <Text style={styles.errorText}>{error}</Text>
+            <TouchableOpacity style={styles.retryButton} onPress={fetchSystems}>
+              <Text style={styles.retryText}>Retry</Text>
+            </TouchableOpacity>
+          </View>
+        ) : (
+          <DropdownField
+            label="System"
+            value={formData.system}
+            placeholder="Choose a system"
+            options={systems}
+            onValueChange={(value) => handleInputChange("system", value)}
+            showPicker={showSystemPicker}
+            setShowPicker={setShowSystemPicker}
+            getOptionLabel={(system) => system.system_number}
+          />
+        )}
 
-        {/* Punch Title */}
         <View style={styles.fieldContainer}>
           <Text style={styles.fieldLabel}>Punch title</Text>
           <TextInput
@@ -168,7 +266,6 @@ const RecordPunchScreen = ({ navigation }: { navigation: any }) => {
           />
         </View>
 
-        {/* Punch Description */}
         <View style={styles.fieldContainer}>
           <Text style={styles.fieldLabel}>Punch description</Text>
           <TextInput
@@ -183,7 +280,6 @@ const RecordPunchScreen = ({ navigation }: { navigation: any }) => {
           />
         </View>
 
-        {/* Punch Category Dropdown */}
         <DropdownField
           label="Punch Category"
           value={formData.punchCategory}
@@ -194,7 +290,6 @@ const RecordPunchScreen = ({ navigation }: { navigation: any }) => {
           setShowPicker={setShowCategoryPicker}
         />
 
-        {/* Punch Image */}
         <View style={styles.fieldContainer}>
           <Text style={styles.fieldLabel}>Punch Image</Text>
           <TouchableOpacity
@@ -206,7 +301,6 @@ const RecordPunchScreen = ({ navigation }: { navigation: any }) => {
           </TouchableOpacity>
         </View>
 
-        {/* Create Button */}
         <TouchableOpacity
           style={styles.createButton}
           onPress={handleCreatePunch}
@@ -241,7 +335,7 @@ const styles = StyleSheet.create({
     textAlign: "center",
   },
   headerSpacer: {
-    width: 34, // Same width as back button to center title
+    width: 34,
   },
   content: {
     flex: 1,
@@ -266,6 +360,9 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: "#E5E5E5",
   },
+  readOnlyInput: {
+    backgroundColor: "#F0F0F0",
+  },
   textArea: {
     height: 100,
     paddingTop: 16,
@@ -283,7 +380,7 @@ const styles = StyleSheet.create({
   },
   dropdownText: {
     fontSize: 16,
-    color: "#333",
+    color: "black",
     flex: 1,
   },
   placeholderText: {
@@ -304,6 +401,25 @@ const styles = StyleSheet.create({
   },
   picker: {
     height: 150,
+    color: "black",
+    backgroundColor: "white", // Ensure picker background is white
+  },
+  pickerItem: {
+    fontSize: 16,
+    color: "black",
+    backgroundColor: "white", // Ensure item background is white
+    ...Platform.select({
+      ios: {
+        // iOS-specific picker item styling
+        fontSize: 16,
+        color: "black",
+      },
+      android: {
+        // Android-specific picker item styling
+        fontSize: 16,
+        color: "black",
+      },
+    }),
   },
   imagePickerContainer: {
     backgroundColor: "white",
@@ -333,6 +449,31 @@ const styles = StyleSheet.create({
     color: "white",
     fontSize: 18,
     fontWeight: "600",
+  },
+  loaderContainer: {
+    marginBottom: 25,
+    alignItems: "center",
+  },
+  errorContainer: {
+    marginBottom: 25,
+    alignItems: "center",
+  },
+  errorText: {
+    fontSize: 16,
+    color: "red",
+    textAlign: "center",
+    marginBottom: 10,
+  },
+  retryButton: {
+    backgroundColor: "#007AFF",
+    padding: 10,
+    borderRadius: 8,
+    alignItems: "center",
+  },
+  retryText: {
+    color: "white",
+    fontSize: 14,
+    fontWeight: "500",
   },
 });
 

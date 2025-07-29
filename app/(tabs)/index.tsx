@@ -1,6 +1,7 @@
 import { useAuth, useUser } from "@clerk/clerk-expo";
 import { Ionicons } from "@expo/vector-icons";
 import axios from "axios";
+import { useRouter } from "expo-router";
 import React, { useCallback, useEffect, useState } from "react";
 import {
   ActivityIndicator,
@@ -23,15 +24,15 @@ interface Project {
 }
 
 const HomeScreen = () => {
-  const { user } = useUser(); // Get the current user from Clerk
-  const { getToken } = useAuth(); // Get the token from useAuth
+  const { user } = useUser();
+  const { getToken } = useAuth();
   const [projects, setProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [hasInitiallyLoaded, setHasInitiallyLoaded] = useState(false);
+  const router = useRouter();
 
-  // Updated function with better error handling and response parsing
   const fetchAssignedProjects = async (isRefreshing = false) => {
     if (!user) {
       setError("User not authenticated");
@@ -46,15 +47,13 @@ const HomeScreen = () => {
       }
       setError(null);
 
-      // Retrieve the Clerk JWT token
       const token = await getToken();
       if (!token) {
         throw new Error("No authentication token found");
       }
 
-      // Make API call to fetch project-user associations
       const response = await axios.get(
-        `http://192.168.11.109:3000/projectuser/${user.id}`,
+        `http://172.20.10.2:3000/projectuser/${user.id}`,
         {
           headers: {
             Authorization: `Bearer ${token}`,
@@ -62,9 +61,8 @@ const HomeScreen = () => {
         }
       );
 
-      console.log("API Response:", response.data); // Debug log
+      console.log("API Response:", response.data);
 
-      // Handle the response based on the new backend structure
       if (response.data.success) {
         setProjects(response.data.projects || []);
       } else {
@@ -76,17 +74,14 @@ const HomeScreen = () => {
       console.error("Fetch error:", err);
 
       if (err.response) {
-        // Server responded with error status
         setError(
           `Server error: ${err.response.status} - ${
             err.response.data?.message || "Unknown error"
           }`
         );
       } else if (err.request) {
-        // Network error
         setError("Network error. Please check your connection.");
       } else {
-        // Other error
         setError(err.message || "Failed to fetch projects. Please try again.");
       }
       setHasInitiallyLoaded(true);
@@ -96,19 +91,16 @@ const HomeScreen = () => {
     }
   };
 
-  // Handle pull-to-refresh
   const onRefresh = useCallback(() => {
     fetchAssignedProjects(true);
   }, [user, getToken]);
 
-  // Fetch projects only once when component mounts and user is available
   useEffect(() => {
     if (user && !hasInitiallyLoaded) {
       fetchAssignedProjects();
     }
-  }, [user]); // Only depend on user, not getToken
+  }, [user]);
 
-  // Function to format the last modified date
   const formatLastModified = (dateString: string) => {
     const date = new Date(dateString);
     const now = new Date();
@@ -120,7 +112,6 @@ const HomeScreen = () => {
     return `${Math.floor(diffInHours / 24)} days ago`;
   };
 
-  // Show loading only on initial load
   if (loading && !hasInitiallyLoaded) {
     return (
       <SafeAreaView style={styles.container}>
@@ -150,7 +141,6 @@ const HomeScreen = () => {
 
   return (
     <SafeAreaView style={styles.container}>
-      {/* Header with Search and Settings */}
       <View style={styles.header}>
         <View style={styles.searchContainer}>
           <Ionicons
@@ -170,7 +160,6 @@ const HomeScreen = () => {
         </TouchableOpacity>
       </View>
 
-      {/* Main Content */}
       <Text style={styles.sectionTitle}>Assigned Projects</Text>
 
       {error ? (
@@ -196,12 +185,20 @@ const HomeScreen = () => {
             <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
           }
         >
-          {/* Project Cards */}
           {projects.length === 0 ? (
             <Text style={styles.noProjectsText}>No projects assigned</Text>
           ) : (
             projects.map((project) => (
-              <TouchableOpacity key={project.uuid} style={styles.projectCard}>
+              <TouchableOpacity
+                key={project.uuid}
+                style={styles.projectCard}
+                onPress={() =>
+                  router.push({
+                    pathname: "/project/[id]",
+                    params: { id: project.uuid, projectName: project.name },
+                  })
+                }
+              >
                 <View style={styles.projectInfo}>
                   <Text style={styles.projectName}>{project.name}</Text>
                   <Text style={styles.projectDescription}>

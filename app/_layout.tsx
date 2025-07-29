@@ -10,7 +10,7 @@ import { useFonts } from "expo-font";
 import { Stack, useRouter } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 
-export default function InnerLayout() {
+export default function RootLayout() {
   const router = useRouter();
   const colorScheme = useColorScheme();
   const [fontsLoaded] = useFonts({
@@ -24,6 +24,7 @@ export default function InnerLayout() {
           <Stack.Screen name="index" options={{ headerShown: false }} />
           <Stack.Screen name="(auth)" options={{ headerShown: false }} />
           <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+          <Stack.Screen name="project/[id]" options={{ headerShown: false }} />
           <Stack.Screen name="+not-found" />
         </Stack>
         <StatusBar style="auto" />
