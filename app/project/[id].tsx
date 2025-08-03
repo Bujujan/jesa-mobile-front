@@ -2,6 +2,7 @@ import { useAuth } from "@clerk/clerk-expo";
 import { Ionicons } from "@expo/vector-icons";
 import { Picker } from "@react-native-picker/picker";
 import axios from "axios";
+import * as ImagePicker from "expo-image-picker";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import React, { useEffect, useState } from "react";
 import {
@@ -16,6 +17,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import { supabase } from "../../lib/supabase";
 
 // Define the System type based on your backend's System entity
 interface System {
@@ -40,15 +42,18 @@ const RecordPunchScreen = () => {
     punchTitle: "",
     punchDescription: "",
     punchCategory: "",
-    punchImage: null,
+    punchStatus: "OPEN",
+    punchImage: null as string | null,
   });
   const [systems, setSystems] = useState<System[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showSystemPicker, setShowSystemPicker] = useState(false);
   const [showCategoryPicker, setShowCategoryPicker] = useState(false);
+  const [showStatusPicker, setShowStatusPicker] = useState(false);
 
   const categories = ["A", "B", "C", "D"];
+  const statuses = ["OPEN", "CLOSED"];
 
   const fetchSystems = async () => {
     if (!id) {
@@ -67,7 +72,7 @@ const RecordPunchScreen = () => {
       }
 
       const response = await axios.get(
-        `http://172.20.10.2:3000/systems/project/${id}`,
+        `${process.env.EXPO_PUBLIC_API_URL}/systems/project/${id}`,
         {
           headers: {
             Authorization: `Bearer ${token}`,
@@ -76,7 +81,6 @@ const RecordPunchScreen = () => {
       );
 
       console.log("Systems API Response:", response.data);
-
       setSystems(response.data || []);
     } catch (err: any) {
       console.error("Fetch systems error:", err);
@@ -109,23 +113,136 @@ const RecordPunchScreen = () => {
     }));
   };
 
-  const handleImagePicker = () => {
-    Alert.alert("Select Image", "Choose an option", [
-      { text: "Camera", onPress: () => console.log("Open Camera") },
-      { text: "Gallery", onPress: () => console.log("Open Gallery") },
-      { text: "Cancel", style: "cancel" },
-    ]);
+  const handleImagePicker = async (source: "camera" | "gallery") => {
+    try {
+      let result: ImagePicker.ImagePickerResult;
+
+      if (source === "camera") {
+        const permission = await ImagePicker.requestCameraPermissionsAsync();
+        if (!permission.granted) {
+          Alert.alert(
+            "Permission required",
+            "Camera access is needed to take photos."
+          );
+          return;
+        }
+        result = await ImagePicker.launchCameraAsync({
+          mediaTypes: ImagePicker.MediaTypeOptions.Images,
+          quality: 0.5,
+        });
+      } else {
+        const permission =
+          await ImagePicker.requestMediaLibraryPermissionsAsync();
+        if (!permission.granted) {
+          Alert.alert(
+            "Permission required",
+            "Gallery access is needed to select photos."
+          );
+          return;
+        }
+        result = await ImagePicker.launchImageLibraryAsync({
+          mediaTypes: ImagePicker.MediaTypeOptions.Images,
+          quality: 0.5,
+        });
+      }
+
+      if (!result.canceled && result.assets && result.assets[0].uri) {
+        const uri = result.assets[0].uri;
+        const fileName = `punch_${Date.now()}.jpg`;
+
+        // Convert image to blob
+        const response = await fetch(uri);
+        const blob = await response.blob();
+
+        // Upload to Supabase storage
+        const { data, error } = await supabase.storage
+          .from("punch-images")
+          .upload(fileName, blob, {
+            contentType: "image/jpeg",
+          });
+
+        if (error) {
+          throw new Error(`Upload failed: ${error.message}`);
+        }
+
+        // Get public URL
+        const { data: publicData } = supabase.storage
+          .from("punch-images")
+          .getPublicUrl(fileName);
+
+        setFormData((prev) => ({
+          ...prev,
+          punchImage: publicData.publicUrl,
+        }));
+
+        Alert.alert("Success", "Image uploaded successfully!");
+      }
+    } catch (err: any) {
+      console.error("Image picker error:", err);
+      Alert.alert("Error", `Failed to upload image: ${err.message}`);
+    }
   };
 
-  const handleCreatePunch = () => {
-    if (!formData.projectName || !formData.punchTitle || !formData.system) {
-      Alert.alert("Error", "Please fill in required fields");
+  const handleCreatePunch = async () => {
+    if (
+      !id ||
+      !formData.system ||
+      !formData.punchTitle ||
+      !formData.punchDescription ||
+      !formData.punchCategory ||
+      !formData.punchStatus
+    ) {
+      Alert.alert(
+        "Error",
+        "Please fill in all required fields: Project, System, Title, Description, Category, and Status"
+      );
       return;
     }
 
-    console.log("Creating punch with data:", formData);
-    Alert.alert("Success", "Punch created successfully!");
-    router.back();
+    try {
+      setLoading(true);
+      const token = await getToken();
+      if (!token) {
+        throw new Error("No authentication token found");
+      }
+
+      const punchData = {
+        project_id: id,
+        system_id: formData.system,
+        title: formData.punchTitle,
+        description: formData.punchDescription,
+        category: formData.punchCategory,
+        status: formData.punchStatus,
+        image_url: formData.punchImage || undefined,
+      };
+
+      await axios.post(
+        `${process.env.EXPO_PUBLIC_API_URL}/punches`,
+        punchData,
+        {
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        }
+      );
+
+      Alert.alert("Success", "Punch created successfully!");
+      router.back();
+    } catch (err: any) {
+      console.error("Create punch error:", err);
+      Alert.alert(
+        "Error",
+        err.response
+          ? `Server error: ${err.response.status} - ${
+              err.response.data?.message || "Unknown error"
+            }`
+          : err.request
+          ? "Network error. Please check your connection."
+          : err.message || "Failed to create punch. Please try again."
+      );
+    } finally {
+      setLoading(false);
+    }
   };
 
   const DropdownField = ({
@@ -137,6 +254,7 @@ const RecordPunchScreen = () => {
     showPicker,
     setShowPicker,
     getOptionLabel,
+    getOptionValue,
   }: {
     label: string;
     value: string;
@@ -146,10 +264,8 @@ const RecordPunchScreen = () => {
     showPicker: boolean;
     setShowPicker: (show: boolean) => void;
     getOptionLabel?: (option: any) => string;
+    getOptionValue?: (option: any) => string;
   }) => {
-    // Debug log to inspect options and selected value
-    console.log(`${label} Dropdown - Value:`, value, "Options:", options);
-
     return (
       <View style={styles.fieldContainer}>
         <Text style={styles.fieldLabel}>{label}</Text>
@@ -160,7 +276,7 @@ const RecordPunchScreen = () => {
           <Text style={[styles.dropdownText, !value && styles.placeholderText]}>
             {value
               ? getOptionLabel
-                ? options.find((opt) => getOptionLabel(opt) === value)
+                ? options.find((opt) => getOptionValue?.(opt) === value)
                     ?.system_number || placeholder
                 : value
               : placeholder}
@@ -185,7 +301,7 @@ const RecordPunchScreen = () => {
                 setShowPicker(false);
               }}
               style={styles.picker}
-              itemStyle={styles.pickerItem} // Apply itemStyle to Picker
+              itemStyle={styles.pickerItem}
             >
               <Picker.Item
                 label={placeholder}
@@ -196,7 +312,7 @@ const RecordPunchScreen = () => {
                 <Picker.Item
                   key={index}
                   label={getOptionLabel ? getOptionLabel(option) : option}
-                  value={getOptionLabel ? getOptionLabel(option) : option}
+                  value={getOptionValue ? getOptionValue(option) : option}
                   style={styles.pickerItem}
                 />
               ))}
@@ -252,6 +368,7 @@ const RecordPunchScreen = () => {
             showPicker={showSystemPicker}
             setShowPicker={setShowSystemPicker}
             getOptionLabel={(system) => system.system_number}
+            getOptionValue={(system) => system.uuid}
           />
         )}
 
@@ -290,22 +407,46 @@ const RecordPunchScreen = () => {
           setShowPicker={setShowCategoryPicker}
         />
 
+        <DropdownField
+          label="Punch Status"
+          value={formData.punchStatus}
+          placeholder="Choose a status"
+          options={statuses}
+          onValueChange={(value) => handleInputChange("punchStatus", value)}
+          showPicker={showStatusPicker}
+          setShowPicker={setShowStatusPicker}
+        />
+
         <View style={styles.fieldContainer}>
           <Text style={styles.fieldLabel}>Punch Image</Text>
           <TouchableOpacity
             style={styles.imagePickerContainer}
-            onPress={handleImagePicker}
+            onPress={() =>
+              Alert.alert("Select Image", "Choose an option", [
+                { text: "Camera", onPress: () => handleImagePicker("camera") },
+                {
+                  text: "Gallery",
+                  onPress: () => handleImagePicker("gallery"),
+                },
+                { text: "Cancel", style: "cancel" },
+              ])
+            }
           >
-            <Text style={styles.imagePickerText}>Insert punch image</Text>
+            <Text style={styles.imagePickerText}>
+              {formData.punchImage ? "Image selected" : "Insert punch image"}
+            </Text>
             <Ionicons name="camera-outline" size={20} color="#999" />
           </TouchableOpacity>
         </View>
 
         <TouchableOpacity
-          style={styles.createButton}
+          style={[styles.createButton, loading && styles.createButtonDisabled]}
           onPress={handleCreatePunch}
+          disabled={loading}
         >
-          <Text style={styles.createButtonText}>Create Punch</Text>
+          <Text style={styles.createButtonText}>
+            {loading ? "Creating..." : "Create Punch"}
+          </Text>
         </TouchableOpacity>
       </ScrollView>
     </SafeAreaView>
@@ -402,20 +543,18 @@ const styles = StyleSheet.create({
   picker: {
     height: 150,
     color: "black",
-    backgroundColor: "white", // Ensure picker background is white
+    backgroundColor: "white",
   },
   pickerItem: {
     fontSize: 16,
     color: "black",
-    backgroundColor: "white", // Ensure item background is white
+    backgroundColor: "white",
     ...Platform.select({
       ios: {
-        // iOS-specific picker item styling
         fontSize: 16,
         color: "black",
       },
       android: {
-        // Android-specific picker item styling
         fontSize: 16,
         color: "black",
       },
@@ -444,6 +583,9 @@ const styles = StyleSheet.create({
     alignItems: "center",
     marginTop: 20,
     marginBottom: 40,
+  },
+  createButtonDisabled: {
+    backgroundColor: "#99C2FF",
   },
   createButtonText: {
     color: "white",

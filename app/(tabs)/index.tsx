@@ -53,7 +53,7 @@ const HomeScreen = () => {
       }
 
       const response = await axios.get(
-        `http://172.20.10.2:3000/projectuser/${user.id}`,
+        `${process.env.EXPO_PUBLIC_API_URL}/projectuser/${user.id}`,
         {
           headers: {
             Authorization: `Bearer ${token}`,
