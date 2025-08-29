@@ -188,9 +188,9 @@ const HomeScreen = () => {
           {projects.length === 0 ? (
             <Text style={styles.noProjectsText}>No projects assigned</Text>
           ) : (
-            projects.map((project) => (
+            projects.map((project, index) => (
               <TouchableOpacity
-                key={project.uuid}
+                key={`${project.uuid}-${index}`}
                 style={styles.projectCard}
                 onPress={() =>
                   router.push({

@@ -8,6 +8,7 @@ import React, { useEffect, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
+  Image,
   Platform,
   SafeAreaView,
   ScrollView,
@@ -19,7 +20,6 @@ import {
 } from "react-native";
 import { supabase } from "../../lib/supabase";
 
-// Define the System type based on your backend's System entity
 interface System {
   uuid: string;
   system_number: string;
@@ -36,6 +36,7 @@ const RecordPunchScreen = () => {
   }>();
   const { getToken } = useAuth();
   const router = useRouter();
+
   const [formData, setFormData] = useState({
     projectName: projectName || "",
     system: "",
@@ -43,11 +44,16 @@ const RecordPunchScreen = () => {
     punchDescription: "",
     punchCategory: "",
     punchStatus: "OPEN",
-    punchImage: null as string | null,
   });
+
   const [systems, setSystems] = useState<System[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // For image handling
+  const [localImageUri, setLocalImageUri] = useState<string | null>(null);
+  const [uploadedImageUrl, setUploadedImageUrl] = useState<string | null>(null);
+
   const [showSystemPicker, setShowSystemPicker] = useState(false);
   const [showCategoryPicker, setShowCategoryPicker] = useState(false);
   const [showStatusPicker, setShowStatusPicker] = useState(false);
@@ -56,34 +62,25 @@ const RecordPunchScreen = () => {
   const statuses = ["OPEN", "CLOSED"];
 
   const fetchSystems = async () => {
-    if (!id) {
-      setError("No project ID provided");
-      setLoading(false);
-      return;
-    }
+    if (!id) return setError("No project ID provided");
 
     try {
       setLoading(true);
       setError(null);
 
       const token = await getToken();
-      if (!token) {
-        throw new Error("No authentication token found");
-      }
+      if (!token) throw new Error("No authentication token found");
 
       const response = await axios.get(
         `${process.env.EXPO_PUBLIC_API_URL}/systems/project/${id}`,
         {
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
+          headers: { Authorization: `Bearer ${token}` },
         }
       );
 
-      console.log("Systems API Response:", response.data);
       setSystems(response.data || []);
     } catch (err: any) {
-      console.error("Fetch systems error:", err);
+      console.error(err);
       setError(
         err.response
           ? `Server error: ${err.response.status} - ${
@@ -99,18 +96,11 @@ const RecordPunchScreen = () => {
   };
 
   useEffect(() => {
-    if (id) {
-      fetchSystems();
-    } else {
-      setError("No project ID provided");
-    }
+    if (id) fetchSystems();
   }, [id]);
 
   const handleInputChange = (field: string, value: string) => {
-    setFormData((prev) => ({
-      ...prev,
-      [field]: value,
-    }));
+    setFormData((prev) => ({ ...prev, [field]: value }));
   };
 
   const handleImagePicker = async (source: "camera" | "gallery") => {
@@ -118,68 +108,131 @@ const RecordPunchScreen = () => {
       let result: ImagePicker.ImagePickerResult;
 
       if (source === "camera") {
-        const permission = await ImagePicker.requestCameraPermissionsAsync();
-        if (!permission.granted) {
-          Alert.alert(
-            "Permission required",
-            "Camera access is needed to take photos."
-          );
-          return;
-        }
+        const { granted } = await ImagePicker.requestCameraPermissionsAsync();
+        if (!granted)
+          return Alert.alert("Permission required", "Camera access is needed.");
         result = await ImagePicker.launchCameraAsync({
           mediaTypes: ImagePicker.MediaTypeOptions.Images,
-          quality: 0.5,
+          quality: 0.7, // Increased quality slightly
+          allowsEditing: true, // Allow basic editing
+          aspect: [4, 3],
         });
       } else {
-        const permission =
+        const { granted } =
           await ImagePicker.requestMediaLibraryPermissionsAsync();
-        if (!permission.granted) {
-          Alert.alert(
+        if (!granted)
+          return Alert.alert(
             "Permission required",
-            "Gallery access is needed to select photos."
+            "Gallery access is needed."
           );
-          return;
-        }
         result = await ImagePicker.launchImageLibraryAsync({
           mediaTypes: ImagePicker.MediaTypeOptions.Images,
-          quality: 0.5,
+          quality: 0.7,
+          allowsEditing: true,
+          aspect: [4, 3],
         });
       }
 
-      if (!result.canceled && result.assets && result.assets[0].uri) {
-        const uri = result.assets[0].uri;
+      if (!result.canceled && result.assets && result.assets.length > 0) {
+        const asset = result.assets[0];
+        const uri = asset.uri;
+        setLocalImageUri(uri); // preview
+
+        // Create FormData for proper file upload
+        const formData = new FormData();
+
+        // Generate unique filename
         const fileName = `punch_${Date.now()}.jpg`;
 
-        // Convert image to blob
-        const response = await fetch(uri);
-        const blob = await response.blob();
+        // For React Native, we need to handle the file differently
+        const fileExtension = uri.split(".").pop() || "jpg";
+        const mimeType = `image/${fileExtension}`;
 
-        // Upload to Supabase storage
-        const { data, error } = await supabase.storage
-          .from("punch-images")
-          .upload(fileName, blob, {
-            contentType: "image/jpeg",
-          });
+        // Create the file object for FormData
+        formData.append("file", {
+          uri: uri,
+          type: mimeType,
+          name: fileName,
+        } as any);
 
-        if (error) {
-          throw new Error(`Upload failed: ${error.message}`);
+        // Alternative method: Convert to base64 then to blob
+        try {
+          // Method 1: Try direct upload with FormData approach
+          const { data, error } = await supabase.storage
+            .from("punch-images")
+            .upload(fileName, formData, {
+              contentType: mimeType,
+              upsert: true,
+            });
+
+          if (error) {
+            console.error("FormData upload failed:", error);
+
+            // Method 2: Fallback to base64 conversion
+            const base64Response = await fetch(uri);
+            const blob = await base64Response.blob();
+
+            // Check if blob has content
+            if (blob.size === 0) {
+              throw new Error("Image file is empty or corrupted");
+            }
+
+            const { data: retryData, error: retryError } =
+              await supabase.storage
+                .from("punch-images")
+                .upload(fileName, blob, {
+                  contentType: mimeType,
+                  upsert: true,
+                });
+
+            if (retryError) throw retryError;
+          }
+
+          const { data: publicData } = supabase.storage
+            .from("punch-images")
+            .getPublicUrl(fileName);
+
+          setUploadedImageUrl(publicData.publicUrl);
+          Alert.alert("Success", "Image uploaded successfully!");
+        } catch (uploadError) {
+          console.error("Upload error:", uploadError);
+
+          // Method 3: Last resort - try with XMLHttpRequest approach
+          try {
+            const response = await fetch(uri);
+            const arrayBuffer = await response.arrayBuffer();
+            const uint8Array = new Uint8Array(arrayBuffer);
+
+            if (uint8Array.length === 0) {
+              throw new Error("Image data is empty");
+            }
+
+            const { data, error } = await supabase.storage
+              .from("punch-images")
+              .upload(fileName, uint8Array, {
+                contentType: mimeType,
+                upsert: true,
+              });
+
+            if (error) throw error;
+
+            const { data: publicData } = supabase.storage
+              .from("punch-images")
+              .getPublicUrl(fileName);
+
+            setUploadedImageUrl(publicData.publicUrl);
+            Alert.alert("Success", "Image uploaded successfully!");
+          } catch (finalError) {
+            throw finalError;
+          }
         }
-
-        // Get public URL
-        const { data: publicData } = supabase.storage
-          .from("punch-images")
-          .getPublicUrl(fileName);
-
-        setFormData((prev) => ({
-          ...prev,
-          punchImage: publicData.publicUrl,
-        }));
-
-        Alert.alert("Success", "Image uploaded successfully!");
       }
     } catch (err: any) {
       console.error("Image picker error:", err);
       Alert.alert("Error", `Failed to upload image: ${err.message}`);
+      // Clear the local image on error
+      setLocalImageUri(null);
+      setUploadedImageUrl(null);
     }
   };
 
@@ -192,19 +245,13 @@ const RecordPunchScreen = () => {
       !formData.punchCategory ||
       !formData.punchStatus
     ) {
-      Alert.alert(
-        "Error",
-        "Please fill in all required fields: Project, System, Title, Description, Category, and Status"
-      );
-      return;
+      return Alert.alert("Error", "Please fill in all required fields.");
     }
 
     try {
       setLoading(true);
       const token = await getToken();
-      if (!token) {
-        throw new Error("No authentication token found");
-      }
+      if (!token) throw new Error("No authentication token found");
 
       const punchData = {
         project_id: id,
@@ -213,23 +260,19 @@ const RecordPunchScreen = () => {
         description: formData.punchDescription,
         category: formData.punchCategory,
         status: formData.punchStatus,
-        image_url: formData.punchImage || undefined,
+        image_url: uploadedImageUrl || undefined,
       };
 
       await axios.post(
         `${process.env.EXPO_PUBLIC_API_URL}/punches`,
         punchData,
-        {
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
-        }
+        { headers: { Authorization: `Bearer ${token}` } }
       );
 
       Alert.alert("Success", "Punch created successfully!");
       router.back();
     } catch (err: any) {
-      console.error("Create punch error:", err);
+      console.error(err);
       Alert.alert(
         "Error",
         err.response
@@ -238,7 +281,7 @@ const RecordPunchScreen = () => {
             }`
           : err.request
           ? "Network error. Please check your connection."
-          : err.message || "Failed to create punch. Please try again."
+          : err.message || "Failed to create punch."
       );
     } finally {
       setLoading(false);
@@ -265,63 +308,60 @@ const RecordPunchScreen = () => {
     setShowPicker: (show: boolean) => void;
     getOptionLabel?: (option: any) => string;
     getOptionValue?: (option: any) => string;
-  }) => {
-    return (
-      <View style={styles.fieldContainer}>
-        <Text style={styles.fieldLabel}>{label}</Text>
-        <TouchableOpacity
-          style={styles.dropdownContainer}
-          onPress={() => setShowPicker(!showPicker)}
-        >
-          <Text style={[styles.dropdownText, !value && styles.placeholderText]}>
-            {value
-              ? getOptionLabel
-                ? options.find((opt) => getOptionValue?.(opt) === value)
-                    ?.system_number || placeholder
-                : value
-              : placeholder}
-          </Text>
-          <Ionicons
-            name="chevron-down"
-            size={20}
-            color="#999"
-            style={[
-              styles.dropdownIcon,
-              showPicker && styles.dropdownIconRotated,
-            ]}
-          />
-        </TouchableOpacity>
-
-        {showPicker && (
-          <View style={styles.pickerContainer}>
-            <Picker
-              selectedValue={value}
-              onValueChange={(itemValue) => {
-                onValueChange(itemValue);
-                setShowPicker(false);
-              }}
-              style={styles.picker}
-              itemStyle={styles.pickerItem}
-            >
+  }) => (
+    <View style={styles.fieldContainer}>
+      <Text style={styles.fieldLabel}>{label}</Text>
+      <TouchableOpacity
+        style={styles.dropdownContainer}
+        onPress={() => setShowPicker(!showPicker)}
+      >
+        <Text style={[styles.dropdownText, !value && styles.placeholderText]}>
+          {value
+            ? getOptionLabel
+              ? options.find((opt) => getOptionValue?.(opt) === value)
+                  ?.system_number || placeholder
+              : value
+            : placeholder}
+        </Text>
+        <Ionicons
+          name="chevron-down"
+          size={20}
+          color="#999"
+          style={[
+            styles.dropdownIcon,
+            showPicker && styles.dropdownIconRotated,
+          ]}
+        />
+      </TouchableOpacity>
+      {showPicker && (
+        <View style={styles.pickerContainer}>
+          <Picker
+            selectedValue={value}
+            onValueChange={(itemValue) => {
+              onValueChange(itemValue);
+              setShowPicker(false);
+            }}
+            style={styles.picker}
+            itemStyle={styles.pickerItem}
+          >
+            <Picker.Item
+              label={placeholder}
+              value=""
+              style={styles.pickerItem}
+            />
+            {options.map((option, index) => (
               <Picker.Item
-                label={placeholder}
-                value=""
+                key={index}
+                label={getOptionLabel ? getOptionLabel(option) : option}
+                value={getOptionValue ? getOptionValue(option) : option}
                 style={styles.pickerItem}
               />
-              {options.map((option, index) => (
-                <Picker.Item
-                  key={index}
-                  label={getOptionLabel ? getOptionLabel(option) : option}
-                  value={getOptionValue ? getOptionValue(option) : option}
-                  style={styles.pickerItem}
-                />
-              ))}
-            </Picker>
-          </View>
-        )}
-      </View>
-    );
-  };
+            ))}
+          </Picker>
+        </View>
+      )}
+    </View>
+  );
 
   return (
     <SafeAreaView style={styles.container}>
@@ -348,9 +388,11 @@ const RecordPunchScreen = () => {
         </View>
 
         {loading ? (
-          <View style={styles.loaderContainer}>
-            <ActivityIndicator size="large" color="#007AFF" />
-          </View>
+          <ActivityIndicator
+            size="large"
+            color="#007AFF"
+            style={{ marginBottom: 25 }}
+          />
         ) : error ? (
           <View style={styles.errorContainer}>
             <Text style={styles.errorText}>{error}</Text>
@@ -433,10 +475,23 @@ const RecordPunchScreen = () => {
             }
           >
             <Text style={styles.imagePickerText}>
-              {formData.punchImage ? "Image selected" : "Insert punch image"}
+              {localImageUri ? "Image selected" : "Insert punch image"}
             </Text>
             <Ionicons name="camera-outline" size={20} color="#999" />
           </TouchableOpacity>
+
+          {localImageUri && (
+            <Image
+              source={{ uri: localImageUri }}
+              style={{
+                width: "100%",
+                height: 200,
+                marginTop: 10,
+                borderRadius: 12,
+              }}
+              resizeMode="cover"
+            />
+          )}
         </View>
 
         <TouchableOpacity

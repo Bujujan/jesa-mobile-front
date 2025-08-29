@@ -81,7 +81,7 @@ export default function TabLayout() {
       <Tabs.Screen
         name="explore"
         options={{
-          title: "Alerts",
+          title: "Punches",
           tabBarIcon: ({ color, focused }) => (
             <IconSymbol
               size={24}
